@@ -225,15 +225,51 @@ async def nhanxu(interaction: discord.Interaction):
     user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | nhanxu | code={code} | link={yeu_link}")
     save_user(uid, user)
 
-    # DM user
+    # DM user with embed
     try:
-        await interaction.user.send(
-            f"🎁 Link YeuMoney của bạn:\n{yeu_link}\n\nSau khi vượt link bạn sẽ được chuyển đến trang hiển thị mã: {WEB_BASE}/{code}"
+        embed = discord.Embed(
+            title="🎁 NHẬN XU MIỄN PHÍ",
+            description="Vượt link bên dưới để nhận xu!",
+            color=0x00ff00
         )
+        embed.add_field(
+            name="📋 Hướng dẫn",
+            value="1️⃣ Click vào link bên dưới\n2️⃣ Hoàn thành vượt link\n3️⃣ Sao chép mã code hiển thị\n4️⃣ Dùng lệnh `/redeem` + mã để nhận xu",
+            inline=False
+        )
+        embed.add_field(
+            name="🔗 Link vượt",
+            value=f"[👉 Click vào đây để vượt link]({yeu_link})",
+            inline=False
+        )
+        embed.add_field(
+            name="💰 Phần thưởng",
+            value=f"**+{REWARD} xu** sau khi hoàn thành",
+            inline=True
+        )
+        embed.add_field(
+            name="⏰ Thời gian",
+            value=f"Có hiệu lực trong {PENDING_EXPIRE_SECONDS // 60} phút",
+            inline=True
+        )
+        embed.set_footer(text=f"Mã code: {code} • Chúc bạn may mắn!")
+        embed.timestamp = datetime.datetime.utcnow()
+        
+        await interaction.user.send(embed=embed)
         await interaction.followup.send("✅ Link đã gửi vào DM của bạn.", ephemeral=True)
     except discord.Forbidden:
-        # cannot DM, send ephemeral with link
-        await interaction.followup.send(f"⚠️ Không thể gửi DM. Link của bạn:\n{yeu_link}", ephemeral=True)
+        # cannot DM, send ephemeral with embed
+        embed = discord.Embed(
+            title="⚠️ Không thể gửi DM",
+            description="Hãy bật DM từ thành viên server để nhận link!",
+            color=0xff0000
+        )
+        embed.add_field(
+            name="🔗 Link của bạn",
+            value=f"[Click vào đây]({yeu_link})",
+            inline=False
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 # /redeem (fallback if user wants manual redeem)
 @bot.tree.command(name="redeem", description="Nhập code để nhận xu (dự phòng)")
