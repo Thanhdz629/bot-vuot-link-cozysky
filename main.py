@@ -95,8 +95,17 @@ def load_user(uid):
     if os.path.exists(p):
         with io_lock:
             with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-    return {"xu": 0, "logs": []}
+                data = json.load(f)
+    else:
+        data = {"xu": 0, "logs": []}
+    
+    # Ensure required keys exist for backwards compatibility
+    if "logs" not in data:
+        data["logs"] = []
+    if "xu" not in data:
+        data["xu"] = 0
+    
+    return data
 
 def save_user(uid, data):
     p = get_user_file(uid)
