@@ -1,8 +1,9 @@
 {
-  "xu": 10000,
+  "xu": 10005,
   "log": [],
   "logs": [
-    "2025-11-07T13:24:37.519876 | nhanxu | code=3344 | link=https://yeumoney.com/DSruE5tT3Z_7"
+    "2025-11-07T13:24:37.519876 | nhanxu | code=3344 | link=https://yeumoney.com/DSruE5tT3Z_7",
+    "2025-11-07T13:27:50.868671 | redeem(web) | code=3344 | +5"
   ],
   "last_day": "2025-11-07",
   "claims_today": 1
