@@ -441,6 +441,10 @@ h1 {
     margin-bottom: 30px;
     font-size: 28px;
 }
+.success-icon {
+    font-size: 64px;
+    margin: 20px 0;
+}
 .code-box {
     background: #f0f8ff;
     border: 3px solid #4CAF50;
@@ -479,22 +483,39 @@ h1 {
     color: #666;
     margin-top: 20px;
     font-size: 16px;
+    line-height: 1.6;
 }
 .success {
     color: #4CAF50;
     font-weight: bold;
+    font-size: 20px;
+}
+.highlight {
+    background: #fff3cd;
+    padding: 15px;
+    border-radius: 10px;
+    margin: 20px 0;
+    border-left: 4px solid #4CAF50;
 }
 </style>
 </head>
 <body>
 <div class="container">
-    <h1>🎁 MÃ CODE CỦA BẠN</h1>
+    <div class="success-icon">✅</div>
+    <h1>HOÀN THÀNH!</h1>
+    <p class="message success">{{msg}}</p>
+    <div class="highlight">
+        <p class="message"><strong>✨ Xu đã được cộng TỰ ĐỘNG vào tài khoản Discord của bạn!</strong></p>
+    </div>
+    <p class="message">Mã code của bạn (chỉ để tham khảo):</p>
     <div class="code-box">
         <div class="code" id="codeText">{{code}}</div>
     </div>
     <button class="copy-btn" onclick="copyCode()">📋 COPY MÃ</button>
-    <p class="message success">{{msg}}</p>
-    <p class="message">Sao chép mã và nhập lệnh <b>/redeem {{code}}</b> trên Discord!</p>
+    <p class="message" style="color: #999; font-size: 14px; margin-top: 30px;">
+        ℹ️ Bạn KHÔNG cần dùng lệnh /redeem nữa.<br>
+        Xu đã được tự động thêm vào tài khoản của bạn!
+    </p>
 </div>
 <script>
 function copyCode() {
