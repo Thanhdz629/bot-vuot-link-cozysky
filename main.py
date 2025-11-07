@@ -19,16 +19,23 @@ from discord import app_commands
 # Flask
 from flask import Flask, render_template_string, request
 
+# Ngrok
+from pyngrok import ngrok, conf
+
 load_dotenv()
 
 # ---------------- CONFIG ----------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 YEUMONEY_TOKEN = os.getenv("YEUMONEY_TOKEN")
+NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN")
 WEB_BASE = os.getenv("WEB_BASE", "https://example.com")  # must be public
-PORT = int(os.getenv("PORT", 5000))
-REWARD = int(os.getenv("REWARD", 5))
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", 2))
-PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS", 600))  # 600s = 10min
+PORT = int(os.getenv("PORT") or 5000)
+REWARD = int(os.getenv("REWARD") or 5)
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 2)
+PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)  # 600s = 10min
+
+# Global variable to store ngrok URL
+NGROK_URL = None
 
 # Files
 CODES_FILE = "codes.json"      # ["ABC","XYZ",...]
@@ -317,14 +324,105 @@ flask_app = Flask(__name__)
 
 HTML_TEMPLATE = """
 <!doctype html>
-<title>Redeem</title>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redeem Code</title>
 <style>
-body{font-family:sans-serif;text-align:center;margin-top:80px}
-.code{font-size:36px;color:green}
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.container {
+    background: white;
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    max-width: 500px;
+    width: 100%;
+}
+h1 {
+    color: #333;
+    margin-bottom: 30px;
+    font-size: 28px;
+}
+.code-box {
+    background: #f0f8ff;
+    border: 3px solid #4CAF50;
+    border-radius: 15px;
+    padding: 30px 20px;
+    margin: 20px 0;
+}
+.code {
+    font-size: 48px;
+    font-weight: bold;
+    color: #4CAF50;
+    letter-spacing: 5px;
+    margin: 10px 0;
+    font-family: 'Courier New', monospace;
+}
+.copy-btn {
+    background: #4CAF50;
+    color: white;
+    border: none;
+    padding: 15px 40px;
+    font-size: 18px;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-top: 20px;
+    transition: all 0.3s;
+    font-weight: bold;
+}
+.copy-btn:hover {
+    background: #45a049;
+    transform: scale(1.05);
+}
+.copy-btn:active {
+    transform: scale(0.95);
+}
+.message {
+    color: #666;
+    margin-top: 20px;
+    font-size: 16px;
+}
+.success {
+    color: #4CAF50;
+    font-weight: bold;
+}
 </style>
-<h1>MÃ CỦA BẠN</h1>
-<p class="code">{{code}}</p>
-<p>{{msg}}</p>
+</head>
+<body>
+<div class="container">
+    <h1>🎁 MÃ CODE CỦA BẠN</h1>
+    <div class="code-box">
+        <div class="code" id="codeText">{{code}}</div>
+    </div>
+    <button class="copy-btn" onclick="copyCode()">📋 COPY MÃ</button>
+    <p class="message success">{{msg}}</p>
+    <p class="message">Sao chép mã và nhập lệnh <b>/redeem {{code}}</b> trên Discord!</p>
+</div>
+<script>
+function copyCode() {
+    const code = document.getElementById('codeText').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.innerText = '✅ ĐÃ COPY!';
+        setTimeout(() => {
+            btn.innerText = '📋 COPY MÃ';
+        }, 2000);
+    });
+}
+</script>
+</body>
+</html>
 """
 
 HTML_USED = """
@@ -386,13 +484,43 @@ def run_flask():
     # allow replit or host port via PORT env
     flask_app.run(host="0.0.0.0", port=PORT)
 
+# Setup ngrok tunnel
+def setup_ngrok():
+    global NGROK_URL, WEB_BASE
+    if NGROK_AUTH_TOKEN:
+        try:
+            conf.get_default().auth_token = NGROK_AUTH_TOKEN
+            public_url = ngrok.connect(PORT, bind_tls=True)
+            NGROK_URL = public_url.public_url
+            WEB_BASE = NGROK_URL
+            print("=" * 70)
+            print("🌐 NGROK TUNNEL ACTIVE")
+            print("=" * 70)
+            print(f"📡 Public URL: {NGROK_URL}")
+            print(f"📡 Local:      http://localhost:{PORT}")
+            print("=" * 70)
+            print(f"✅ WEB_BASE automatically set to: {WEB_BASE}")
+            print("=" * 70)
+        except Exception as e:
+            print(f"❌ Ngrok failed: {e}")
+            print("⚠️  Continuing with WEB_BASE from .env")
+    else:
+        print("⚠️  NGROK_AUTH_TOKEN not found. Using WEB_BASE from .env")
+
 # ---------------- Startup ----------------
 if __name__ == "__main__":
+    # setup ngrok first
+    setup_ngrok()
+    
     # start pending cleanup thread
     t = threading.Thread(target=pending_cleanup_loop, daemon=True)
     t.start()
     # start flask thread
     fthread = threading.Thread(target=run_flask, daemon=True)
     fthread.start()
+    
+    # wait for flask to start
+    time.sleep(2)
+    
     # run discord bot (blocking)
     bot.run(DISCORD_TOKEN)
