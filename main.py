@@ -9,6 +9,7 @@ import threading
 import time
 import datetime
 import requests
+import uuid
 from dotenv import load_dotenv
 
 # Discord
@@ -38,9 +39,9 @@ PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)  # 600s
 NGROK_URL = None
 
 # Files
-CODES_FILE = "codes.json"      # ["ABC","XYZ",...]
-PENDING_FILE = "pending.json"  # { "ABC": {"user_id": "...", "created":"iso", "yeu_link":"..."} }
-USED_FILE = "used.json"        # { "ABC": {"user_id":"...", "time":"iso", "yeu_link":"..."} }
+CODES_FILE = "codes.json"      # ["2102","3456",...]
+PENDING_FILE = "pending.json"  # { "token-uuid": {"code": "2102", "user_id": "...", "created":"iso", "yeu_link":"...", "redeemed": false} }
+USED_FILE = "used.json"        # { "code": {"user_id":"...", "time":"iso", "token":"..."} }
 DATA_DIR = "data"              # per-user files: data/<user_id>.json
 
 # Ensure folders and files
@@ -54,8 +55,8 @@ for fpath, default in [
         with open(fpath, "w", encoding="utf-8") as f:
             json.dump(default, f, ensure_ascii=False, indent=2)
 
-# Simple thread lock for file IO
-io_lock = threading.Lock()
+# Re-entrant lock for file IO (allows nested helper calls)
+io_lock = threading.RLock()
 
 # ---------------- Helper IO ----------------
 def load_json_file(path):
@@ -104,9 +105,9 @@ def save_user(uid, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ---------------- YeuMoney API ----------------
-def create_yeumoney_link(code):
+def create_yeumoney_link(token):
     """
-    Call YeuMoney QL_api to shorten WEB_BASE/<code>.
+    Call YeuMoney QL_api to shorten WEB_BASE/<token>.
     Uses format=text to get raw shortened link.
     Returns shortened link (string) or None on failure.
     """
@@ -114,7 +115,7 @@ def create_yeumoney_link(code):
     if not WEB_BASE:
         print("WEB_BASE not configured")
         return None
-    original = f"{WEB_BASE.rstrip('/')}/{code}"
+    original = f"{WEB_BASE.rstrip('/')}/{token}"
     # URL encode
     target = quote(original, safe='')
     api = f"https://yeumoney.com/QL_api.php?token={YEUMONEY_TOKEN}&format=text&url={target}"
@@ -131,28 +132,37 @@ def create_yeumoney_link(code):
 
 # ---------------- Background expire task ----------------
 def pending_cleanup_loop():
-    # runs in background thread, checks every 30s for expired pending codes
+    # runs in background thread, checks every 30s for expired pending tokens
     while True:
         try:
             pending = load_pending()
             changed = False
             now = datetime.datetime.utcnow()
-            for code, info in list(pending.items()):
+            for token, info in list(pending.items()):
                 created = datetime.datetime.fromisoformat(info["created"])
                 if (now - created).total_seconds() > PENDING_EXPIRE_SECONDS:
-                    # expire: move code back to codes.json and remove pending
-                    print(f"[CLEANUP] Code expired: {code}")
-                    codes = load_codes()
-                    if code not in codes:
-                        codes.append(code)
-                        save_codes(codes)
-                    pending.pop(code, None)
+                    # expire: only return code if NOT redeemed
+                    code = info.get("code")
+                    redeemed = info.get("redeemed", False)
+                    print(f"[CLEANUP] Token expired: {token}, code: {code}, redeemed: {redeemed}")
+                    
+                    if not redeemed:
+                        # Only return unredeemed codes to pool
+                        codes = load_codes()
+                        if code and code not in codes:
+                            codes.append(code)
+                            save_codes(codes)
+                            print(f"[CLEANUP] Code {code} returned to pool")
+                    
+                    # Remove token from pending
+                    pending.pop(token, None)
                     changed = True
+                    
                     # notify owner if possible
                     try:
                         uid = int(info.get("user_id"))
                         user = load_user(uid)
-                        user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | expire | code={code}")
+                        user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | expire | code={code} | redeemed={redeemed}")
                         save_user(uid, user)
                     except Exception:
                         pass
@@ -200,8 +210,11 @@ async def nhanxu(interaction: discord.Interaction):
     codes.remove(code)
     save_codes(codes)
 
-    # create yeumoney link
-    yeu_link = create_yeumoney_link(code)
+    # create UUID token for security
+    token = uuid.uuid4().hex
+    
+    # create yeumoney link with token
+    yeu_link = create_yeumoney_link(token)
     if not yeu_link:
         # if fail, return code back
         codes = load_codes()
@@ -210,12 +223,14 @@ async def nhanxu(interaction: discord.Interaction):
             save_codes(codes)
         return await interaction.followup.send("❌ Lỗi khi tạo link YeuMoney. Vui lòng thử lại sau.", ephemeral=True)
 
-    # mark pending
+    # mark pending with token as key
     pending = load_pending()
-    pending[code] = {
+    pending[token] = {
+        "code": code,
         "user_id": str(uid),
         "created": datetime.datetime.utcnow().isoformat(),
-        "yeu_link": yeu_link
+        "yeu_link": yeu_link,
+        "redeemed": False
     }
     save_pending(pending)
 
@@ -275,34 +290,58 @@ async def nhanxu(interaction: discord.Interaction):
 @bot.tree.command(name="redeem", description="Nhập code để nhận xu (dự phòng)")
 @app_commands.describe(code="Mã")
 async def redeem(interaction: discord.Interaction, code: str):
-    # Check used mapping
+    uid = str(interaction.user.id)
+    code = code.strip()
+    
+    # Check if already used
     used = load_used()
-    # If code in used and user matches, already given
     if code in used:
+        if used[code].get("user_id") == uid:
+            return await interaction.response.send_message("⚠️ Bạn đã nhận xu từ mã này rồi.", ephemeral=True)
         return await interaction.response.send_message("⚠️ Mã đã được dùng.", ephemeral=True)
-    # Check pending — only owner can redeem via command
+    
+    # Find token with matching code in pending
     pending = load_pending()
-    if code not in pending:
+    found_token = None
+    for token, info in pending.items():
+        if info.get("code") == code:
+            found_token = token
+            break
+    
+    if not found_token:
         return await interaction.response.send_message("⚠️ Mã không tồn tại hoặc đã hết hạn.", ephemeral=True)
-    owner = pending[code].get("user_id")
-    if str(interaction.user.id) != str(owner):
+    
+    info = pending[found_token]
+    owner = info.get("user_id")
+    
+    # Check ownership
+    if uid != owner:
         return await interaction.response.send_message("❌ Mã không thuộc về bạn.", ephemeral=True)
-    # give reward and mark used
-    # move pending->used
+    
+    # Check if already redeemed
+    if info.get("redeemed", False):
+        return await interaction.response.send_message("⚠️ Bạn đã nhận xu từ mã này rồi.", ephemeral=True)
+    
+    # Give reward and mark used
     used = load_used()
     used[code] = {
         "user_id": owner,
         "time": datetime.datetime.utcnow().isoformat(),
-        "yeu_link": pending[code].get("yeu_link")
+        "token": found_token,
+        "yeu_link": info.get("yeu_link")
     }
     save_used(used)
-    pending.pop(code, None)
+    
+    # Mark redeemed in pending
+    pending[found_token]["redeemed"] = True
     save_pending(pending)
-    # add xu
+    
+    # Add xu
     user = load_user(int(owner))
     user["xu"] = user.get("xu", 0) + REWARD
     user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | redeem(manual) | code={code} | +{REWARD}")
     save_user(int(owner), user)
+    
     await interaction.response.send_message(f"✅ Đã cộng {REWARD} xu cho bạn. Tổng: {user['xu']}", ephemeral=True)
 
 # admin commands: givexu, setxu, xoaxu, resetxu (use guild admin)
@@ -470,31 +509,114 @@ HTML_USED = """
 <h1>Mã đã được sử dụng hoặc không còn hiệu lực.</h1>
 """
 
-@flask_app.route("/<code>")
-def show_code(code):
-    code = code.strip()
-    # check used
-    used = load_used()
-    if code in used:
-        return render_template_string(HTML_USED), 200
+HTML_HOME = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Discord Bot - Hệ thống nhận xu</title>
+<style>
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.container {
+    background: white;
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    max-width: 600px;
+    width: 100%;
+}
+h1 {
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 32px;
+}
+.status {
+    background: #4CAF50;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 10px;
+    display: inline-block;
+    margin: 20px 0;
+    font-weight: bold;
+}
+.info {
+    color: #666;
+    line-height: 1.8;
+    margin: 20px 0;
+}
+.discord-icon {
+    font-size: 64px;
+    margin: 20px 0;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="discord-icon">🤖</div>
+    <h1>HỆ THỐNG NHẬN XU</h1>
+    <div class="status">✅ ĐANG HOẠT ĐỘNG</div>
+    <div class="info">
+        <p><strong>Hệ thống Discord Bot đang chạy bình thường!</strong></p>
+        <p>Để nhận xu, hãy sử dụng lệnh <code>/nhanxu</code> trên Discord server.</p>
+        <p>Trang này chỉ hiển thị mã code sau khi bạn vượt link YeuMoney.</p>
+    </div>
+</div>
+</body>
+</html>
+"""
 
-    pending = load_pending()
-    if code in pending:
-        info = pending[code]
+@flask_app.route("/")
+def home():
+    return render_template_string(HTML_HOME), 200
+
+@flask_app.route("/<token>")
+def show_token(token):
+    token = token.strip()
+    
+    # Atomic redemption with RLock (allows nested helper calls)
+    with io_lock:
+        # Load state once
+        pending = load_pending()
+        used = load_used()
+        
+        # Validate token exists
+        if token not in pending:
+            return render_template_string(HTML_USED), 404
+        
+        info = pending[token]
+        code = info.get("code")
         owner = info.get("user_id")
         yeu_link = info.get("yeu_link")
-        # mark used, reward owner
-        used = load_used()
+        redeemed = info.get("redeemed", False)
+        
+        # Check if already redeemed
+        if redeemed or code in used:
+            return render_template_string(HTML_USED), 200
+        
+        # Mark as redeemed and save
         used[code] = {
             "user_id": owner,
             "time": datetime.datetime.utcnow().isoformat(),
+            "token": token,
             "yeu_link": yeu_link
         }
         save_used(used)
-        # remove from pending
-        pending.pop(code, None)
+        
+        pending[token]["redeemed"] = True
         save_pending(pending)
-        # give reward
+        
+        # Give reward
         try:
             uid = int(owner)
             user = load_user(uid)
@@ -502,21 +624,11 @@ def show_code(code):
             user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | redeem(web) | code={code} | +{REWARD}")
             save_user(uid, user)
             msg = f"Bạn đã nhận +{REWARD} xu. Tổng: {user['xu']}"
-        except Exception:
+        except Exception as e:
+            print(f"Error rewarding user: {e}")
             msg = "Đã xác nhận mã. (Không thể cộng xu do lỗi nội bộ.)"
-        return render_template_string(HTML_TEMPLATE, code=code, msg=msg), 200
-
-    # if code still in available codes -> means not issued (admin left it)
-    codes = load_codes()
-    if code in codes:
-        return render_template_string("""
-            <!doctype html>
-            <h1>Code chưa được cấp cho ai.</h1>
-            <p>Code: {{c}}</p>
-        """, c=code), 200
-
-    # else not found
-    return render_template_string(HTML_USED), 404
+    
+    return render_template_string(HTML_TEMPLATE, code=code, msg=msg), 200
 
 # Run flask in a separate thread
 def run_flask():
