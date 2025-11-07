@@ -52,8 +52,9 @@ def save_user(uid, data):
 def gen_short_link_for_code(code):
     """Call YeuMoney QL_api to shorten WEB_BASE/<code>, returns short link (text) or None."""
     try:
+        from urllib.parse import quote
         original = f"{WEB_BASE.rstrip('/')}/{code}"
-        api = f"https://yeumoney.com/QL_api.php?token={YEUMONEY_TOKEN}&format=text&url={requests.utils.quote(original, safe='')}"
+        api = f"https://yeumoney.com/QL_api.php?token={YEUMONEY_TOKEN}&format=text&url={quote(original, safe='')}"
         r = requests.get(api, timeout=10)
         if r.status_code == 200 and r.text.strip():
             return r.text.strip()
@@ -175,6 +176,28 @@ async def nhanxu(interaction: discord.Interaction):
     except discord.Forbidden:
         await interaction.followup.send(f"⚠️ Không thể gửi DM — link của bạn:\n{yeu_link}", ephemeral=True)
 
+# /checkxu command
+@bot.tree.command(name="checkxu", description="Kiểm tra số xu hiện tại của bạn")
+async def checkxu(interaction: discord.Interaction):
+    user = load_user(interaction.user.id)
+    xu = user.get("xu", 0)
+    claims = user.get("claims_today", 0)
+    today = datetime.date.today().isoformat()
+    
+    # Reset daily count if new day
+    if user.get("last") != today:
+        claims = 0
+    
+    remaining = max(0, DAILY_LIMIT - claims)
+    
+    embed = discord.Embed(title="💰 Thông tin Xu", color=0x00ff00)
+    embed.add_field(name="Tổng Xu", value=f"{xu} xu", inline=False)
+    embed.add_field(name="Lượt nhận hôm nay", value=f"{claims}/{DAILY_LIMIT}", inline=True)
+    embed.add_field(name="Còn lại", value=f"{remaining} lượt", inline=True)
+    embed.set_footer(text=f"Mỗi lần nhận: {REWARD} xu")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # /redeem manual (optional fallback if web cannot notify)
 @bot.tree.command(name="redeem", description="Nhập mã nếu web không tự báo (dự phòng)")
 @app_commands.describe(code="Mã nhận được")
@@ -244,4 +267,7 @@ async def on_connect():
     bot.loop.create_task(start_webhook_app())
 
 if __name__ == "__main__":
+    if not DISCORD_TOKEN:
+        print("ERROR: DISCORD_TOKEN not found in environment!")
+        exit(1)
     bot.run(DISCORD_TOKEN)
