@@ -4,6 +4,7 @@ import os, json, random, string, asyncio, requests, datetime, pathlib
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 from aiohttp import web
 
 load_dotenv()
