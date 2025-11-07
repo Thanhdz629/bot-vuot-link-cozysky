@@ -110,9 +110,12 @@ def create_yeumoney_link(code):
     Uses format=text to get raw shortened link.
     Returns shortened link (string) or None on failure.
     """
+    from urllib.parse import quote
+    if not WEB_BASE:
+        print("WEB_BASE not configured")
+        return None
     original = f"{WEB_BASE.rstrip('/')}/{code}"
     # URL encode
-    from requests.utils import quote
     target = quote(original, safe='')
     api = f"https://yeumoney.com/QL_api.php?token={YEUMONEY_TOKEN}&format=text&url={target}"
     try:
@@ -490,7 +493,7 @@ def setup_ngrok():
     if NGROK_AUTH_TOKEN:
         try:
             conf.get_default().auth_token = NGROK_AUTH_TOKEN
-            public_url = ngrok.connect(PORT, bind_tls=True)
+            public_url = ngrok.connect(str(PORT), bind_tls=True)
             NGROK_URL = public_url.public_url
             WEB_BASE = NGROK_URL
             print("=" * 70)
@@ -523,4 +526,7 @@ if __name__ == "__main__":
     time.sleep(2)
     
     # run discord bot (blocking)
+    if not DISCORD_TOKEN:
+        print("❌ DISCORD_TOKEN not found in environment!")
+        exit(1)
     bot.run(DISCORD_TOKEN)
