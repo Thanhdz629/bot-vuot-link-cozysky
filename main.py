@@ -26,6 +26,7 @@ from pyngrok import ngrok, conf
 load_dotenv()
 
 # ---------------- CONFIG ----------------
+RUTXU_CHANNEL_ID = os.getenv("RUTXU_CHANNEL_ID")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 YEUMONEY_TOKEN = os.getenv("YEUMONEY_TOKEN")
 NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN")
@@ -39,7 +40,7 @@ PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)  # 600s
 NGROK_URL = None
 
 # Files
-CODES_FILE = "codes.json"      # ["2102","3456",...]
+CODES_FILE = "codes.json"       # ["2102","3456",...]
 PENDING_FILE = "pending.json"  # { "token-uuid": {"code": "2102", "user_id": "...", "created":"iso", "yeu_link":"...", "redeemed": false} }
 USED_FILE = "used.json"        # { "code": {"user_id":"...", "time":"iso", "token":"..."} }
 DATA_DIR = "data"              # per-user files: data/<user_id>.json
@@ -98,13 +99,13 @@ def load_user(uid):
                 data = json.load(f)
     else:
         data = {"xu": 0, "logs": []}
-    
+
     # Ensure required keys exist for backwards compatibility
     if "logs" not in data:
         data["logs"] = []
     if "xu" not in data:
         data["xu"] = 0
-    
+
     return data
 
 def save_user(uid, data):
@@ -154,7 +155,7 @@ def pending_cleanup_loop():
                     code = info.get("code")
                     redeemed = info.get("redeemed", False)
                     print(f"[CLEANUP] Token expired: {token}, code: {code}, redeemed: {redeemed}")
-                    
+
                     if not redeemed:
                         # Only return unredeemed codes to pool
                         codes = load_codes()
@@ -162,11 +163,11 @@ def pending_cleanup_loop():
                             codes.append(code)
                             save_codes(codes)
                             print(f"[CLEANUP] Code {code} returned to pool")
-                    
+
                     # Remove token from pending
                     pending.pop(token, None)
                     changed = True
-                    
+
                     # notify owner if possible
                     try:
                         uid = int(info.get("user_id"))
@@ -221,7 +222,7 @@ async def nhanxu(interaction: discord.Interaction):
 
     # create UUID token for security
     token = uuid.uuid4().hex
-    
+
     # create yeumoney link with token
     yeu_link = create_yeumoney_link(token)
     if not yeu_link:
@@ -258,7 +259,7 @@ async def nhanxu(interaction: discord.Interaction):
         )
         embed.add_field(
             name="📋 Hướng dẫn",
-            value="1️⃣ Click vào link bên dưới\n2️⃣ Hoàn thành vượt link\n3️⃣ Sao chép mã code hiển thị\n4️⃣ Dùng lệnh `/redeem` + mã để nhận xu",
+            value="1️⃣ Click vào link bên dưới\n2️⃣ Hoàn thành vượt link để nhận xu tự động\n",
             inline=False
         )
         embed.add_field(
@@ -276,9 +277,9 @@ async def nhanxu(interaction: discord.Interaction):
             value=f"Có hiệu lực trong {PENDING_EXPIRE_SECONDS // 60} phút",
             inline=True
         )
-        embed.set_footer(text=f"Mã code: {code} • Chúc bạn may mắn!")
+        embed.set_footer(text=f" • Chúc bạn may mắn!")
         embed.timestamp = datetime.datetime.utcnow()
-        
+
         await interaction.user.send(embed=embed)
         await interaction.followup.send("✅ Link đã gửi vào DM của bạn.", ephemeral=True)
     except discord.Forbidden:
@@ -294,64 +295,6 @@ async def nhanxu(interaction: discord.Interaction):
             inline=False
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
-
-# /redeem (fallback if user wants manual redeem)
-@bot.tree.command(name="redeem", description="Nhập code để nhận xu (dự phòng)")
-@app_commands.describe(code="Mã")
-async def redeem(interaction: discord.Interaction, code: str):
-    uid = str(interaction.user.id)
-    code = code.strip()
-    
-    # Check if already used
-    used = load_used()
-    if code in used:
-        if used[code].get("user_id") == uid:
-            return await interaction.response.send_message("⚠️ Bạn đã nhận xu từ mã này rồi.", ephemeral=True)
-        return await interaction.response.send_message("⚠️ Mã đã được dùng.", ephemeral=True)
-    
-    # Find token with matching code in pending
-    pending = load_pending()
-    found_token = None
-    for token, info in pending.items():
-        if info.get("code") == code:
-            found_token = token
-            break
-    
-    if not found_token:
-        return await interaction.response.send_message("⚠️ Mã không tồn tại hoặc đã hết hạn.", ephemeral=True)
-    
-    info = pending[found_token]
-    owner = info.get("user_id")
-    
-    # Check ownership
-    if uid != owner:
-        return await interaction.response.send_message("❌ Mã không thuộc về bạn.", ephemeral=True)
-    
-    # Check if already redeemed
-    if info.get("redeemed", False):
-        return await interaction.response.send_message("⚠️ Bạn đã nhận xu từ mã này rồi.", ephemeral=True)
-    
-    # Give reward and mark used
-    used = load_used()
-    used[code] = {
-        "user_id": owner,
-        "time": datetime.datetime.utcnow().isoformat(),
-        "token": found_token,
-        "yeu_link": info.get("yeu_link")
-    }
-    save_used(used)
-    
-    # Mark redeemed in pending
-    pending[found_token]["redeemed"] = True
-    save_pending(pending)
-    
-    # Add xu
-    user = load_user(int(owner))
-    user["xu"] = user.get("xu", 0) + REWARD
-    user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | redeem(manual) | code={code} | +{REWARD}")
-    save_user(int(owner), user)
-    
-    await interaction.response.send_message(f"✅ Đã cộng {REWARD} xu cho bạn. Tổng: {user['xu']}", ephemeral=True)
 
 # admin commands: givexu, setxu, xoaxu, resetxu (use guild admin)
 async def check_admin(interaction):
@@ -405,6 +348,80 @@ async def resetxu(interaction: discord.Interaction, member: discord.Member):
 async def checkxu(interaction: discord.Interaction):
     u = load_user(interaction.user.id)
     await interaction.response.send_message(f"💰 Bạn có {u.get('xu',0)} xu.", ephemeral=True)
+
+
+
+                    # ---------------- Lệnh /rutxu ----------------
+                    @bot.tree.command(name="rutxu", description="Rút xu (xu được chuyển thành lệnh /playerpoint)")
+                    @app_commands.describe(name_in_game="Tên người chơi trong game", amount="Số xu muốn rút")
+                    async def rutxu(interaction: discord.Interaction, name_in_game: str, amount: int):
+                        # Defer the response so the bot has time to process
+                        await interaction.response.defer(ephemeral=True)
+
+                        uid = interaction.user.id
+                        user = load_user(uid)
+                        current_xu = user.get("xu", 0)
+
+                        # 1. Validate amount
+                        if amount <= 0:
+                            return await interaction.followup.send("⚠️ Số lượng xu phải lớn hơn 0.", ephemeral=True)
+
+                        # 2. Check sufficient balance
+                        if amount > current_xu:
+                            return await interaction.followup.send(f"⚠️ Bạn không đủ xu. Bạn hiện có: **{current_xu}** xu.", ephemeral=True)
+
+                        # Check Channel ID
+                        if not RUTXU_CHANNEL_ID:
+                            print("RUTXU_CHANNEL_ID is not configured in .env!")
+                            return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** Quản trị viên chưa thiết lập ID kênh rút xu (RUTXU_CHANNEL_ID).", ephemeral=True)
+
+                        # Get the target channel using the configured ID
+                        try:
+                            target_channel_id = int(RUTXU_CHANNEL_ID)
+                            channel = bot.get_channel(target_channel_id)
+                            if not channel:
+                                # Try to fetch channel if bot hasn't cached it
+                                channel = await bot.fetch_channel(target_channel_id)
+                        except Exception:
+                            return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** ID kênh rút xu không hợp lệ.", ephemeral=True)
+
+                        if not channel:
+                            return await interaction.followup.send("❌ **LỖI KÊNH:** Bot không tìm thấy kênh rút xu đã cấu hình. Vui lòng kiểm tra lại ID.", ephemeral=True)
+
+                        # 3. Deduct xu and save log
+                        user["xu"] = current_xu - amount
+                        user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | rutxu | -{amount} | name={name_in_game} | channel_id={RUTXU_CHANNEL_ID}")
+                        save_user(uid, user)
+
+                        # 4. Format the final command (sử dụng / như trong hình ảnh)
+                        final_command = f"/playerpoint give {name_in_game} {amount}"
+
+                        # Prepare a confirmation message for the user (ephemeral)
+                        await interaction.followup.send(
+                            f"✅ **Giao dịch hoàn tất!**\n"
+                            f"**-{amount} xu** đã được trừ khỏi tài khoản của bạn. (Còn lại: **{user['xu']}** xu).\n"
+                            f"Lệnh chuyển điểm đã được gửi đến kênh quản lý.",
+                            ephemeral=True
+                        )
+
+                        # Send the actual command to the configured channel
+                        try:
+                            # Gửi DUY NHẤT dòng lệnh final_command dưới dạng tin nhắn thường
+                            await channel.send(f"{final_command}")
+                        except discord.Forbidden:
+                            # This handles if the bot can't send messages in the target channel
+                            await interaction.user.send(
+                                f"❌ **LỖI GỬI LỆNH:** Lệnh rút xu đã bị trừ nhưng bot không có quyền gửi lệnh tới kênh chuyển lệnh (<#{target_channel_id}>).\n"
+                                f"Vui lòng liên hệ quản trị viên với thông tin này.",
+                                ephemeral=False
+                            )
+                        except Exception as e:
+                            # General sending failure
+                            await interaction.user.send(
+                                f"❌ **LỖI NỘI BỘ:** Lệnh rút xu đã bị trừ nhưng bot không thể gửi lệnh tới kênh chuyển lệnh. (`{e}`).\n"
+                                f"Vui lòng liên hệ quản trị viên với thông tin này.",
+                                ephemeral=False
+                            )
 
 # ---------------- Flask web ----------------
 flask_app = Flask(__name__)
@@ -613,27 +630,28 @@ def home():
 @flask_app.route("/<token>")
 def show_token(token):
     token = token.strip()
-    
+
     # Atomic redemption with RLock (allows nested helper calls)
     with io_lock:
         # Load state once
         pending = load_pending()
         used = load_used()
-        
+
         # Validate token exists
         if token not in pending:
             return render_template_string(HTML_USED), 404
-        
+
         info = pending[token]
         code = info.get("code")
         owner = info.get("user_id")
         yeu_link = info.get("yeu_link")
         redeemed = info.get("redeemed", False)
-        
+
         # Check if already redeemed
+        # We check in 'used' for extra safety, though 'redeemed' in pending should catch it
         if redeemed or code in used:
             return render_template_string(HTML_USED), 200
-        
+
         # Mark as redeemed and save
         used[code] = {
             "user_id": owner,
@@ -642,10 +660,10 @@ def show_token(token):
             "yeu_link": yeu_link
         }
         save_used(used)
-        
+
         pending[token]["redeemed"] = True
         save_pending(pending)
-        
+
         # Give reward
         try:
             uid = int(owner)
@@ -657,7 +675,7 @@ def show_token(token):
         except Exception as e:
             print(f"Error rewarding user: {e}")
             msg = "Đã xác nhận mã. (Không thể cộng xu do lỗi nội bộ.)"
-    
+
     return render_template_string(HTML_TEMPLATE, code=code, msg=msg), 200
 
 # Run flask in a separate thread
@@ -678,7 +696,7 @@ def setup_ngrok():
             print("🌐 NGROK TUNNEL ACTIVE")
             print("=" * 70)
             print(f"📡 Public URL: {NGROK_URL}")
-            print(f"📡 Local:      http://localhost:{PORT}")
+            print(f"📡 Local:       http://localhost:{PORT}")
             print("=" * 70)
             print(f"✅ WEB_BASE automatically set to: {WEB_BASE}")
             print("=" * 70)
@@ -692,17 +710,17 @@ def setup_ngrok():
 if __name__ == "__main__":
     # setup ngrok first
     setup_ngrok()
-    
+
     # start pending cleanup thread
     t = threading.Thread(target=pending_cleanup_loop, daemon=True)
     t.start()
     # start flask thread
     fthread = threading.Thread(target=run_flask, daemon=True)
     fthread.start()
-    
+
     # wait for flask to start
     time.sleep(2)
-    
+
     # run discord bot (blocking)
     if not DISCORD_TOKEN:
         print("❌ DISCORD_TOKEN not found in environment!")

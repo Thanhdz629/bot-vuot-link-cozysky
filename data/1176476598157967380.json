@@ -1,10 +1,13 @@
 {
-  "xu": 10005,
-  "log": [],
+  "xu": 500,
   "logs": [
-    "2025-11-07T13:24:37.519876 | nhanxu | code=3344 | link=https://yeumoney.com/DSruE5tT3Z_7",
-    "2025-11-07T13:27:50.868671 | redeem(web) | code=3344 | +5"
+    "2025-11-07T13:53:06.305289 | nhanxu | code=CPHVA77K | link=https://yeumoney.com/9R39XThC5",
+    "2025-11-07T13:53:23.921542 | redeem(web) | code=CPHVA77K | +5",
+    "2025-11-07T14:03:22.406338 | expire | code=CPHVA77K | redeemed=True",
+    "2025-11-07T23:56:14.207417 | nhanxu | code=PS96F8SG | link=https://yeumoney.com/CnQ45zAf0",
+    "2025-11-07T23:58:54.113500 | admin_setxu | = 1000",
+    "2025-11-07T23:59:11.294754 | rutxu | -500 | name=StainMC_2102 | channel_id=1290339842051539005"
   ],
   "last_day": "2025-11-07",
-  "claims_today": 1
+  "claims_today": 2
 }
