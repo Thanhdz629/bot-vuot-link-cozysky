@@ -30,11 +30,13 @@ RUTXU_CHANNEL_ID = os.getenv("RUTXU_CHANNEL_ID")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 YEUMONEY_TOKEN = os.getenv("YEUMONEY_TOKEN")
 NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN")
-WEB_BASE = os.getenv("WEB_BASE", "https://example.com")  # must be public
+WEB_BASE = os.getenv("WEB_BASE", "https://example.com")
 PORT = int(os.getenv("PORT") or 5000)
 REWARD = int(os.getenv("REWARD") or 5)
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 2)
-PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)  # 600s = 10min
+PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
 
 # Global variable to store ngrok URL
 NGROK_URL = None
@@ -296,10 +298,9 @@ async def nhanxu(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-# admin commands: givexu, setxu, xoaxu, resetxu (use guild admin)
-async def check_admin(interaction):
-    return interaction.user.guild_permissions.administrator
-
+# --------------------------
+# Admin commands
+# --------------------------
 @bot.tree.command(name="givexu", description="Admin: cộng xu cho user")
 @app_commands.describe(member="Người nhận", amount="Số xu")
 async def givexu(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -310,6 +311,7 @@ async def givexu(interaction: discord.Interaction, member: discord.Member, amoun
     u["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | admin_givexu | +{amount}")
     save_user(member.id, u)
     await interaction.response.send_message(f"✅ Đã cộng {amount} xu cho {member.display_name}.", ephemeral=True)
+
 
 @bot.tree.command(name="setxu", description="Admin: set xu cho user")
 @app_commands.describe(member="Người nhận", amount="Số xu")
@@ -322,6 +324,7 @@ async def setxu(interaction: discord.Interaction, member: discord.Member, amount
     save_user(member.id, u)
     await interaction.response.send_message(f"✅ Đã đặt {amount} xu cho {member.display_name}.", ephemeral=True)
 
+
 @bot.tree.command(name="xoaxu", description="Admin: trừ xu của user")
 @app_commands.describe(member="Người nhận", amount="Số xu")
 async def xoaxu(interaction: discord.Interaction, member: discord.Member, amount: int):
@@ -332,6 +335,7 @@ async def xoaxu(interaction: discord.Interaction, member: discord.Member, amount
     u["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | admin_xoaxu | -{amount}")
     save_user(member.id, u)
     await interaction.response.send_message(f"✅ Đã trừ {amount} xu của {member.display_name}.", ephemeral=True)
+
 
 @bot.tree.command(name="resetxu", description="Admin: reset xu của user")
 @app_commands.describe(member="Người nhận")
@@ -344,6 +348,63 @@ async def resetxu(interaction: discord.Interaction, member: discord.Member):
     save_user(member.id, u)
     await interaction.response.send_message(f"✅ Đã reset xu cho {member.display_name}.", ephemeral=True)
 
+
+# --------------------------
+# Prefix command !nhanxu
+# --------------------------
+@bot.command(name="nhanxu")
+async def prefix_nhanxu(ctx):
+    embed = discord.Embed(
+        title="🎁 HỆ THỐNG NHẬN XU",
+        description=(
+            "Dùng các nút bên dưới để thao tác nhanh:\n"
+            "• Nhận Xu: nhận link YeuMoney\n"
+            "• Rút Xu: mở form rút xu\n"
+            "• Check Xu: xem số xu hiện có"
+        ),
+        color=0x00FF00,
+    )
+    view = View()
+
+    async def nhanxu_callback(interaction: discord.Interaction):
+        if interaction.user.id != ctx.author.id:
+            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
+        await bot.tree.get_command("nhanxu").callback(bot, interaction)
+
+    btn_nhanxu = Button(label="Nhận Xu", style=discord.ButtonStyle.primary)
+    btn_nhanxu.callback = nhanxu_callback
+    view.add_item(btn_nhanxu)
+
+    async def rutxu_callback(interaction: discord.Interaction):
+        if interaction.user.id != ctx.author.id:
+            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
+        class RutXuModal(discord.ui.Modal, title="Rút xu"):
+            name_in_game = discord.ui.TextInput(label="Tên người chơi trong game", placeholder="Nhập tên game", required=True)
+            amount = discord.ui.TextInput(label="Số xu muốn rút", placeholder="Nhập số xu", required=True)
+
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                try:
+                    amount_int = int(self.amount.value)
+                except:
+                    return await modal_interaction.response.send_message("⚠️ Số xu phải là số nguyên.", ephemeral=True)
+                await bot.tree.get_command("rutxu").callback(bot, modal_interaction, self.name_in_game.value, amount_int)
+        await interaction.response.send_modal(RutXuModal())
+
+    btn_rutxu = Button(label="Rút Xu", style=discord.ButtonStyle.secondary)
+    btn_rutxu.callback = rutxu_callback
+    view.add_item(btn_rutxu)
+
+    async def checkxu_callback(interaction: discord.Interaction):
+        if interaction.user.id != ctx.author.id:
+            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
+        await bot.tree.get_command("checkxu").callback(bot, interaction)
+
+    btn_checkxu = Button(label="Check Xu", style=discord.ButtonStyle.success)
+    btn_checkxu.callback = checkxu_callback
+    view.add_item(btn_checkxu)
+
+    await ctx.send(embed=embed, view=view)
+# --- checkxu
 @bot.tree.command(name="checkxu", description="Xem số xu của bạn")
 async def checkxu(interaction: discord.Interaction):
     u = load_user(interaction.user.id)
@@ -351,77 +412,125 @@ async def checkxu(interaction: discord.Interaction):
 
 
 
-                    # ---------------- Lệnh /rutxu ----------------
-                    @bot.tree.command(name="rutxu", description="Rút xu (xu được chuyển thành lệnh /playerpoint)")
-                    @app_commands.describe(name_in_game="Tên người chơi trong game", amount="Số xu muốn rút")
-                    async def rutxu(interaction: discord.Interaction, name_in_game: str, amount: int):
-                        # Defer the response so the bot has time to process
-                        await interaction.response.defer(ephemeral=True)
+ --------------------------
+# /rutxu
+# --------------------------
+@bot.tree.command(name="rutxu", description="Rút xu (xu được chuyển thành lệnh /playerpoint)")
+@app_commands.describe(name_in_game="Tên người chơi trong game", amount="Số xu muốn rút")
+async def rutxu(interaction: discord.Interaction, name_in_game: str, amount: int):
+    await interaction.response.defer(ephemeral=True)
+    uid = interaction.user.id
+    user = load_user(uid)
+    current_xu = user.get("xu", 0)
+    if amount <= 0:
+        return await interaction.followup.send("⚠️ Số lượng xu phải lớn hơn 0.", ephemeral=True)
+    if amount > current_xu:
+        return await interaction.followup.send(f"⚠️ Bạn không đủ xu. Bạn hiện có: **{current_xu}** xu.", ephemeral=True)
+    if not RUTXU_CHANNEL_ID:
+        return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** Chưa thiết lập ID kênh rút xu.", ephemeral=True)
+    try:
+        target_channel_id = int(RUTXU_CHANNEL_ID)
+        channel = bot.get_channel(target_channel_id)
+        if not channel:
+            channel = await bot.fetch_channel(target_channel_id)
+    except Exception:
+        return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** ID kênh rút xu không hợp lệ.", ephemeral=True)
+    SERVER_STATUS_CHANNEL_ID = os.getenv("SERVER_STATUS_CHANNEL_ID")
+    if not SERVER_STATUS_CHANNEL_ID:
+        return await interaction.followup.send("⚠️ **Chưa cấu hình SERVER_STATUS_CHANNEL_ID trong .env.**", ephemeral=True)
+    try:
+        status_channel = bot.get_channel(int(SERVER_STATUS_CHANNEL_ID))
+        if not status_channel:
+            status_channel = await bot.fetch_channel(int(SERVER_STATUS_CHANNEL_ID))
+    except Exception:
+        return await interaction.followup.send("❌ **Lỗi:** Không tìm thấy kênh trạng thái server. Kiểm tra lại ID trong `.env`.", ephemeral=True)
+    channel_name = status_channel.name or ""
+    if "🔴" in channel_name:
+        return await interaction.followup.send("🚫 **Hiện tại máy chủ đang tạm bảo trì (🔴).**\nVui lòng thử lại sau khi server mở lại.", ephemeral=True)
+    if "🟢" not in channel_name:
+        return await interaction.followup.send("⚠️ **Không xác định được trạng thái server.**\nTên kênh trạng thái phải chứa 🟢 (mở) hoặc 🔴 (bảo trì).", ephemeral=True)
+    user["xu"] = current_xu - amount
+    user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | rutxu | -{amount} | name={name_in_game} | channel_id={RUTXU_CHANNEL_ID}")
+    save_user(uid, user)
+    final_command = f"!playerpoint give {name_in_game} {amount}"
+    await interaction.followup.send(f"✅ **Giao dịch hoàn tất!**\n**-{amount} xu** đã được trừ khỏi tài khoản của bạn. (Còn lại: **{user['xu']}** xu)\nLệnh chuyển điểm đã được gửi đến kênh quản lý.", ephemeral=True)
+    try:
+        await channel.send(final_command)
+    except discord.Forbidden:
+        await interaction.user.send(f"❌ **LỖI GỬI LỆNH:** Lệnh rút xu đã bị trừ nhưng bot không có quyền gửi lệnh tới kênh chuyển lệnh (<#{target_channel_id}>).\nVui lòng liên hệ quản trị viên với thông tin này.")
+    except Exception as e:
+        await interaction.user.send(f"❌ **LỖI NỘI BỘ:** Lệnh rút xu đã bị trừ nhưng bot không thể gửi lệnh tới kênh chuyển lệnh. (`{e}`).\nVui lòng liên hệ quản trị viên với thông tin này.")
 
-                        uid = interaction.user.id
-                        user = load_user(uid)
-                        current_xu = user.get("xu", 0)
 
-                        # 1. Validate amount
-                        if amount <= 0:
-                            return await interaction.followup.send("⚠️ Số lượng xu phải lớn hơn 0.", ephemeral=True)
+    # 4. Kiểm tra trạng thái server qua kênh trạng thái
+    SERVER_STATUS_CHANNEL_ID = os.getenv("SERVER_STATUS_CHANNEL_ID")
+    if not SERVER_STATUS_CHANNEL_ID:
+        return await interaction.followup.send(
+            "⚠️ **Chưa cấu hình SERVER_STATUS_CHANNEL_ID trong .env.**",
+            ephemeral=True
+        )
 
-                        # 2. Check sufficient balance
-                        if amount > current_xu:
-                            return await interaction.followup.send(f"⚠️ Bạn không đủ xu. Bạn hiện có: **{current_xu}** xu.", ephemeral=True)
+    try:
+        status_channel = bot.get_channel(int(SERVER_STATUS_CHANNEL_ID))
+        if not status_channel:
+            status_channel = await bot.fetch_channel(int(SERVER_STATUS_CHANNEL_ID))
+    except Exception:
+        return await interaction.followup.send(
+            "❌ **Lỗi:** Không tìm thấy kênh trạng thái server. Kiểm tra lại ID trong `.env`.",
+            ephemeral=True
+        )
 
-                        # Check Channel ID
-                        if not RUTXU_CHANNEL_ID:
-                            print("RUTXU_CHANNEL_ID is not configured in .env!")
-                            return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** Quản trị viên chưa thiết lập ID kênh rút xu (RUTXU_CHANNEL_ID).", ephemeral=True)
+    channel_name = status_channel.name or ""
 
-                        # Get the target channel using the configured ID
-                        try:
-                            target_channel_id = int(RUTXU_CHANNEL_ID)
-                            channel = bot.get_channel(target_channel_id)
-                            if not channel:
-                                # Try to fetch channel if bot hasn't cached it
-                                channel = await bot.fetch_channel(target_channel_id)
-                        except Exception:
-                            return await interaction.followup.send("❌ **LỖI CẤU HÌNH:** ID kênh rút xu không hợp lệ.", ephemeral=True)
+    if "🔴" in channel_name:
+        return await interaction.followup.send(
+            "🚫 **Hiện tại máy chủ đang tạm bảo trì (🔴).**\n"
+            "Vui lòng thử lại sau khi server mở lại.",
+            ephemeral=True
+        )
 
-                        if not channel:
-                            return await interaction.followup.send("❌ **LỖI KÊNH:** Bot không tìm thấy kênh rút xu đã cấu hình. Vui lòng kiểm tra lại ID.", ephemeral=True)
+    if "🟢" not in channel_name:
+        return await interaction.followup.send(
+            "⚠️ **Không xác định được trạng thái server.**\n"
+            "Tên kênh trạng thái phải chứa 🟢 (mở) hoặc 🔴 (bảo trì).",
+            ephemeral=True
+        )
 
-                        # 3. Deduct xu and save log
-                        user["xu"] = current_xu - amount
-                        user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | rutxu | -{amount} | name={name_in_game} | channel_id={RUTXU_CHANNEL_ID}")
-                        save_user(uid, user)
+    # 5. Trừ xu và lưu log
+    user["xu"] = current_xu - amount
+    user["logs"].append(
+        f"{datetime.datetime.utcnow().isoformat()} | rutxu | -{amount} | name={name_in_game} | channel_id={RUTXU_CHANNEL_ID}"
+    )
+    save_user(uid, user)
 
-                        # 4. Format the final command (sử dụng / như trong hình ảnh)
-                        final_command = f"/playerpoint give {name_in_game} {amount}"
+    # 6. Tạo lệnh gửi đến kênh
+    final_command = f"!playerpoint give {name_in_game} {amount}"
 
-                        # Prepare a confirmation message for the user (ephemeral)
-                        await interaction.followup.send(
-                            f"✅ **Giao dịch hoàn tất!**\n"
-                            f"**-{amount} xu** đã được trừ khỏi tài khoản của bạn. (Còn lại: **{user['xu']}** xu).\n"
-                            f"Lệnh chuyển điểm đã được gửi đến kênh quản lý.",
-                            ephemeral=True
-                        )
+    await interaction.followup.send(
+        f"✅ **Giao dịch hoàn tất!**\n"
+        f"**-{amount} xu** đã được trừ khỏi tài khoản của bạn. "
+        f"(Còn lại: **{user['xu']}** xu)\n"
+        f"Lệnh chuyển điểm đã được gửi đến kênh quản lý.",
+        ephemeral=True
+    )
 
-                        # Send the actual command to the configured channel
-                        try:
-                            # Gửi DUY NHẤT dòng lệnh final_command dưới dạng tin nhắn thường
-                            await channel.send(f"{final_command}")
-                        except discord.Forbidden:
-                            # This handles if the bot can't send messages in the target channel
-                            await interaction.user.send(
-                                f"❌ **LỖI GỬI LỆNH:** Lệnh rút xu đã bị trừ nhưng bot không có quyền gửi lệnh tới kênh chuyển lệnh (<#{target_channel_id}>).\n"
-                                f"Vui lòng liên hệ quản trị viên với thông tin này.",
-                                ephemeral=False
-                            )
-                        except Exception as e:
-                            # General sending failure
-                            await interaction.user.send(
-                                f"❌ **LỖI NỘI BỘ:** Lệnh rút xu đã bị trừ nhưng bot không thể gửi lệnh tới kênh chuyển lệnh. (`{e}`).\n"
-                                f"Vui lòng liên hệ quản trị viên với thông tin này.",
-                                ephemeral=False
-                            )
+    # 7. Gửi lệnh qua kênh rút xu
+    try:
+        await channel.send(final_command)
+    except discord.Forbidden:
+        await interaction.user.send(
+            f"❌ **LỖI GỬI LỆNH:** Lệnh rút xu đã bị trừ nhưng bot không có quyền gửi lệnh tới "
+            f"kênh chuyển lệnh (<#{target_channel_id}>).\n"
+            f"Vui lòng liên hệ quản trị viên với thông tin này."
+        )
+    except Exception as e:
+        await interaction.user.send(
+            f"❌ **LỖI NỘI BỘ:** Lệnh rút xu đã bị trừ nhưng bot không thể gửi lệnh tới "
+            f"kênh chuyển lệnh. (`{e}`).\nVui lòng liên hệ quản trị viên với thông tin này."
+        )
+
+
+
 
 # ---------------- Flask web ----------------
 flask_app = Flask(__name__)
