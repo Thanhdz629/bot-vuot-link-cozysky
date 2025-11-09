@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button
 
 # Flask
 from flask import Flask, render_template_string, request
@@ -115,6 +116,16 @@ def save_user(uid, data):
     with io_lock:
         with open(p, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ---------------- Admin check helper ----------------
+async def check_admin(interaction: discord.Interaction) -> bool:
+    """Check if user is admin. Returns True if authorized, False otherwise."""
+    if not ADMIN_IDS:
+        print("⚠️  WARNING: ADMIN_IDS not configured in .env")
+        return False
+    if interaction.user.id not in ADMIN_IDS:
+        return False
+    return True
 
 # ---------------- YeuMoney API ----------------
 def create_yeumoney_link(token):
@@ -797,6 +808,16 @@ def setup_ngrok():
     if NGROK_AUTH_TOKEN:
         try:
             conf.get_default().auth_token = NGROK_AUTH_TOKEN
+            
+            # Kill all existing ngrok tunnels to avoid conflicts
+            try:
+                print("🔄 Closing all existing ngrok tunnels...")
+                ngrok.kill()
+                time.sleep(1)
+            except Exception as cleanup_err:
+                print(f"⚠️  Could not kill existing tunnels: {cleanup_err}")
+            
+            # Create new tunnel
             public_url = ngrok.connect(str(PORT), bind_tls=True)
             NGROK_URL = public_url.public_url
             WEB_BASE = NGROK_URL
