@@ -2,12 +2,13 @@
 
 This is a Discord bot integrated with a Flask web server and YeuMoney payment service. The bot manages a virtual currency system ("xu") where users can earn rewards by completing YeuMoney link visits and redeem codes for currency. The system includes:
 
-- Discord bot with slash commands for claiming, redeeming, and withdrawing virtual currency
+- Discord bot with slash commands and interactive buttons for claiming, redeeming, and withdrawing virtual currency
 - Flask web server to display redemption codes and handle callback URLs
 - YeuMoney API integration for generating payment/visit links
 - Automated code generation system to maintain a pool of redeemable codes
 - Per-user tracking of currency balances, transaction logs, and daily claim limits
 - Ngrok tunneling to expose local web server for external redirects
+- Interactive UI with buttons and modals for better user experience
 
 # User Preferences
 
