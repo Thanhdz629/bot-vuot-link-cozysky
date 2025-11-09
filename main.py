@@ -404,15 +404,14 @@ async def prefix_nhanxu(ctx):
     view.add_item(btn_checkxu)
 
     await ctx.send(embed=embed, view=view)
+
 # --- checkxu
 @bot.tree.command(name="checkxu", description="Xem số xu của bạn")
 async def checkxu(interaction: discord.Interaction):
     u = load_user(interaction.user.id)
     await interaction.response.send_message(f"💰 Bạn có {u.get('xu',0)} xu.", ephemeral=True)
 
-
-
- --------------------------
+# --------------------------
 # /rutxu
 # --------------------------
 @bot.tree.command(name="rutxu", description="Rút xu (xu được chuyển thành lệnh /playerpoint)")
