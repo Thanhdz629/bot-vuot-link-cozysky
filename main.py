@@ -11,18 +11,21 @@ import datetime
 import requests
 import uuid
 from dotenv import load_dotenv
+import asyncio
 
 # Discord
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Button
+# No UI buttons: buttons removed per user request
+from typing import Optional
 
 # Flask
 from flask import Flask, render_template_string, request
 
 # Ngrok
 from pyngrok import ngrok, conf
+import gen_code
 
 load_dotenv()
 
@@ -372,58 +375,42 @@ async def prefix_nhanxu(ctx):
     embed = discord.Embed(
         title="🎁 HỆ THỐNG NHẬN XU",
         description=(
-            "Dùng các nút bên dưới để thao tác nhanh:\n"
-            "• Nhận Xu: nhận link YeuMoney\n"
-            "• Rút Xu: mở form rút xu\n"
-            "• Check Xu: xem số xu hiện có"
+            "Sử dụng các lệnh slash để thao tác nhanh:\n"
+            "• `/nhanxu` — Nhận link YeuMoney (gửi DM)\n"
+            "• `/rutxu` — Mở form rút xu (hoặc gọi với tham số)\n"
+            "• `/checkxu` — Xem số xu hiện có"
         ),
         color=0x00FF00,
     )
-    view = View()
 
-    async def nhanxu_callback(interaction: discord.Interaction):
-        if interaction.user.id != ctx.author.id:
-            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
-        await nhanxu_logic(interaction)
-
-    btn_nhanxu = Button(label="Nhận Xu", style=discord.ButtonStyle.primary)
-    btn_nhanxu.callback = nhanxu_callback
-    view.add_item(btn_nhanxu)
-
-    async def rutxu_callback(interaction: discord.Interaction):
-        if interaction.user.id != ctx.author.id:
-            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
-        class RutXuModal(discord.ui.Modal, title="Rút xu"):
-            name_in_game = discord.ui.TextInput(label="Tên người chơi trong game", placeholder="Nhập tên game", required=True)
-            amount = discord.ui.TextInput(label="Số xu muốn rút", placeholder="Nhập số xu", required=True)
-
-            async def on_submit(self, modal_interaction: discord.Interaction):
-                try:
-                    amount_int = int(self.amount.value)
-                except:
-                    return await modal_interaction.response.send_message("⚠️ Số xu phải là số nguyên.", ephemeral=True)
-                await rutxu_logic(modal_interaction, self.name_in_game.value, amount_int)
-        await interaction.response.send_modal(RutXuModal())
-
-    btn_rutxu = Button(label="Rút Xu", style=discord.ButtonStyle.secondary)
-    btn_rutxu.callback = rutxu_callback
-    view.add_item(btn_rutxu)
-
-    async def checkxu_callback(interaction: discord.Interaction):
-        if interaction.user.id != ctx.author.id:
-            return await interaction.response.send_message("⚠️ Bạn không được phép dùng nút này.", ephemeral=True)
-        await checkxu_logic(interaction)
-
-    btn_checkxu = Button(label="Check Xu", style=discord.ButtonStyle.success)
-    btn_checkxu.callback = checkxu_callback
-    view.add_item(btn_checkxu)
-
-    await ctx.send(embed=embed, view=view)
+    # No buttons — instruct users to use slash commands instead
+    await ctx.send(embed=embed)
 
 # --- checkxu - Helper function
 async def checkxu_logic(interaction: discord.Interaction):
     u = load_user(interaction.user.id)
     await interaction.response.send_message(f"💰 Bạn có {u.get('xu',0)} xu.", ephemeral=True)
+
+
+# Reusable Modal for Rút Xu (module-level so buttons can open it like the slash command)
+class RutXuModal(discord.ui.Modal, title="Rút xu"):
+    name_in_game = discord.ui.TextInput(label="Tên người chơi trong game", placeholder="Nhập tên game", required=True)
+    amount = discord.ui.TextInput(label="Số xu muốn rút", placeholder="Nhập số xu", required=True)
+
+    def __init__(self, author_id: int):
+        super().__init__()
+        self.author_id = author_id
+
+    async def on_submit(self, modal_interaction: discord.Interaction):
+        # ensure only the original user can submit the modal
+        if modal_interaction.user.id != self.author_id:
+            return await modal_interaction.response.send_message("⚠️ Bạn không được phép dùng form này.", ephemeral=True)
+        try:
+            amount_int = int(self.amount.value)
+        except Exception:
+            return await modal_interaction.response.send_message("⚠️ Số xu phải là số nguyên.", ephemeral=True)
+        # call the same logic as the slash command
+        await rutxu_logic(modal_interaction, self.name_in_game.value, amount_int)
 
 # Slash command wrapper
 @bot.tree.command(name="checkxu", description="Xem số xu của bạn")
@@ -490,7 +477,13 @@ async def rutxu_logic(interaction: discord.Interaction, name_in_game: str, amoun
 # Slash command wrapper
 @bot.tree.command(name="rutxu", description="Rút xu (xu được chuyển thành lệnh /playerpoint)")
 @app_commands.describe(name_in_game="Tên người chơi trong game", amount="Số xu muốn rút")
-async def rutxu(interaction: discord.Interaction, name_in_game: str, amount: int):
+async def rutxu(interaction: discord.Interaction, name_in_game: Optional[str] = None, amount: Optional[int] = None):
+    # If user didn't provide args, open the modal to collect name and amount (same modal used by buttons)
+    if name_in_game is None or amount is None:
+        # respond with modal to collect values
+        await interaction.response.send_modal(RutXuModal(interaction.user.id))
+        return
+
     await rutxu_logic(interaction, name_in_game, amount)
 
 # ---------------- Flask web ----------------
@@ -805,4 +798,25 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         print("❌ DISCORD_TOKEN not found in environment!")
         exit(1)
-    bot.run(DISCORD_TOKEN)
+    # Start bot via asyncio so we can await async setup in external modules (e.g. gen_code.setup)
+    async def start_bot():
+        # Try to load gen_code cog if it exposes `setup`
+        try:
+            if hasattr(gen_code, "setup"):
+                if asyncio.iscoroutinefunction(gen_code.setup):
+                    await gen_code.setup(bot)
+                else:
+                    gen_code.setup(bot)
+                print("Loaded gen_code cog")
+        except Exception as e:
+            print("Failed to load gen_code cog:", e)
+
+        # Start the bot (this will block until stopped)
+        await bot.start(DISCORD_TOKEN)
+
+    try:
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        print("Keyboard interrupt received, shutting down")
+    except Exception as e:
+        print("Bot exited with error:", e)
