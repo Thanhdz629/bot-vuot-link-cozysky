@@ -39,6 +39,7 @@ PORT = int(os.getenv("PORT") or 5000)
 REWARD = int(os.getenv("REWARD") or 5)
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 2)
 PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)
+WITHDRAW_MIN = int(os.getenv("WITHDRAW_MIN") or 50)
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
 
@@ -409,6 +410,8 @@ class RutXuModal(discord.ui.Modal, title="Rút xu"):
             amount_int = int(self.amount.value)
         except Exception:
             return await modal_interaction.response.send_message("⚠️ Số xu phải là số nguyên.", ephemeral=True)
+        if amount_int < WITHDRAW_MIN:
+            return await modal_interaction.response.send_message(f"⚠️ Mức rút tối thiểu là {WITHDRAW_MIN} xu.", ephemeral=True)
         # call the same logic as the slash command
         await rutxu_logic(modal_interaction, self.name_in_game.value, amount_int)
 
@@ -429,7 +432,9 @@ async def rutxu_logic(interaction: discord.Interaction, name_in_game: str, amoun
     current_xu = user.get("xu", 0)
     
     if amount <= 0:
-        return await interaction.followup.send("⚠️ Số lượng xu phải lớn hơn 0.", ephemeral=True)
+        return await interaction.followup.send(f"⚠️ Số lượng xu phải lớn hơn 0 (tối thiểu {WITHDRAW_MIN} xu).", ephemeral=True)
+    if amount < WITHDRAW_MIN:
+        return await interaction.followup.send(f"⚠️ Mức rút tối thiểu là {WITHDRAW_MIN} xu.", ephemeral=True)
     if amount > current_xu:
         return await interaction.followup.send(f"⚠️ Bạn không đủ xu. Bạn hiện có: **{current_xu}** xu.", ephemeral=True)
     if not RUTXU_CHANNEL_ID:
