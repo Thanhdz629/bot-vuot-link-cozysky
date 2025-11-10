@@ -40,6 +40,8 @@ REWARD = int(os.getenv("REWARD") or 5)
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 2)
 PENDING_EXPIRE_SECONDS = int(os.getenv("PENDING_EXPIRE_SECONDS") or 600)
 WITHDRAW_MIN = int(os.getenv("WITHDRAW_MIN") or 50)
+STARTUP_STATUS = os.getenv("STARTUP_STATUS", "cozysky.mcviet.top")
+OFFLINE_STATUS = os.getenv("OFFLINE_STATUS", "Bot is Offline")
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
 
@@ -212,6 +214,23 @@ async def on_ready():
         print(f"Synced {len(synced)} commands")
     except Exception as e:
         print("Sync failed:", e)
+    # Set presence/activity to indicate the bot is online and show the website
+    try:
+        await bot.change_presence(activity=discord.Game(STARTUP_STATUS), status=discord.Status.online)
+        print(f"Presence set to: {STARTUP_STATUS}")
+    except Exception as e:
+        print("Failed to set presence:", e)
+
+
+@bot.event
+async def on_disconnect():
+    # Best-effort: when the bot disconnects, try to set an offline presence text (may not succeed if already disconnected)
+    print("Bot disconnected")
+    try:
+        await bot.change_presence(activity=discord.Game(OFFLINE_STATUS), status=discord.Status.invisible)
+        print(f"Presence set to offline text: {OFFLINE_STATUS}")
+    except Exception as e:
+        print("Failed to set offline presence (expected if disconnected):", e)
 
 # /nhanxu - Helper function
 async def nhanxu_logic(interaction: discord.Interaction):
