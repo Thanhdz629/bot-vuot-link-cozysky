@@ -9,7 +9,6 @@ import uuid
 from dotenv import load_dotenv
 import asyncio
 import traceback
-import traceback
 
 # Discord
 import discord
