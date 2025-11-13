@@ -1,7 +1,3 @@
-# main.py
-# Bot Discord + Flask web + YeuMoney QL_api integration
-# Run: python3 main.py
-
 import os
 import json
 import random
@@ -12,6 +8,8 @@ import requests
 import uuid
 from dotenv import load_dotenv
 import asyncio
+import traceback
+import traceback
 
 # Discord
 import discord
@@ -35,6 +33,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 YEUMONEY_TOKEN = os.getenv("YEUMONEY_TOKEN")
 NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN")
 WEB_BASE = os.getenv("WEB_BASE", "https://example.com")
+DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 PORT = int(os.getenv("PORT") or 5000)
 REWARD = int(os.getenv("REWARD") or 5)
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT") or 2)
@@ -142,21 +141,30 @@ def create_yeumoney_link(token):
     """
     from urllib.parse import quote
     if not WEB_BASE:
-        print("WEB_BASE not configured")
+        print("❌ [create_yeumoney_link] WEB_BASE not configured")
+        return None
+    if not YEUMONEY_TOKEN:
+        print("❌ [create_yeumoney_link] YEUMONEY_TOKEN not configured")
         return None
     original = f"{WEB_BASE.rstrip('/')}/{token}"
     # URL encode
     target = quote(original, safe='')
     api = f"https://yeumoney.com/QL_api.php?token={YEUMONEY_TOKEN}&format=text&url={target}"
+    print(f"[create_yeumoney_link] Calling: {api[:80]}...")
     try:
         r = requests.get(api, timeout=10)
+        print(f"[create_yeumoney_link] Status: {r.status_code}, response len: {len(r.text)}")
         if r.status_code == 200:
             txt = r.text.strip()
             # QL_api returns empty string on error sometimes; check
             if txt and txt.startswith("http"):
+                print(f"[create_yeumoney_link] ✅ Got link: {txt[:60]}...")
                 return txt
+            else:
+                print(f"[create_yeumoney_link] ❌ Response doesn't look like link: {txt[:80]}")
     except Exception as e:
-        print("YeuMoney API error:", e)
+        print("❌ [create_yeumoney_link] YeuMoney API error:", e)
+        traceback.print_exc()
     return None
 
 # ---------------- Background expire task ----------------
@@ -210,8 +218,19 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 async def on_ready():
     print("Bot ready:", bot.user)
     try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
+        # If DEV_GUILD_ID is set, sync to that guild for instant availability (useful for testing)
+        if DEV_GUILD_ID:
+            try:
+                guild_obj = discord.Object(id=int(DEV_GUILD_ID))
+                synced = await bot.tree.sync(guild=guild_obj)
+                print(f"Synced {len(synced)} commands to DEV_GUILD_ID {DEV_GUILD_ID}")
+            except Exception as e:
+                print("Guild sync failed, falling back to global sync:", e)
+                synced = await bot.tree.sync()
+                print(f"Synced {len(synced)} commands (global)")
+        else:
+            synced = await bot.tree.sync()
+            print(f"Synced {len(synced)} commands")
     except Exception as e:
         print("Sync failed:", e)
     # Set presence/activity to indicate the bot is online and show the website
@@ -234,107 +253,160 @@ async def on_disconnect():
 
 # /nhanxu - Helper function
 async def nhanxu_logic(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    # Check daily limit per user
-    uid = interaction.user.id
-    user = load_user(uid)
-    today = datetime.date.today().isoformat()
-    if user.get("last_day") != today:
-        user["last_day"] = today
-        user["claims_today"] = 0
-    if user.get("claims_today", 0) >= DAILY_LIMIT:
-        return await interaction.followup.send(f"⚠️ Bạn đã nhận đủ {DAILY_LIMIT} lần hôm nay.", ephemeral=True)
-
-    codes = load_codes()
-    if not codes:
-        return await interaction.followup.send("⚠️ Hiện không còn code.", ephemeral=True)
-
-    # pop random code
-    code = random.choice(codes)
-    # remove it
-    codes.remove(code)
-    save_codes(codes)
-
-    # create UUID token for security
-    token = uuid.uuid4().hex
-
-    # create yeumoney link with token
-    yeu_link = create_yeumoney_link(token)
-    if not yeu_link:
-        # if fail, return code back
-        codes = load_codes()
-        if code not in codes:
-            codes.append(code)
-            save_codes(codes)
-        return await interaction.followup.send("❌ Lỗi khi tạo link YeuMoney. Vui lòng thử lại sau.", ephemeral=True)
-
-    # mark pending with token as key
-    pending = load_pending()
-    pending[token] = {
-        "code": code,
-        "user_id": str(uid),
-        "created": datetime.datetime.utcnow().isoformat(),
-        "yeu_link": yeu_link,
-        "redeemed": False
-    }
-    save_pending(pending)
-
-    # update user claims
-    user["claims_today"] = user.get("claims_today", 0) + 1
-    user["last_day"] = today
-    user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | nhanxu | code={code} | link={yeu_link}")
-    save_user(uid, user)
-
-    # DM user with embed
+    """Handle the claim link flow. Uses defer/followup when possible but falls back to response if defer fails."""
+    deferred = False
     try:
-        embed = discord.Embed(
-            title="🎁 NHẬN XU MIỄN PHÍ",
-            description="Vượt link bên dưới để nhận xu!",
-            color=0x00ff00
-        )
-        embed.add_field(
-            name="📋 Hướng dẫn",
-            value="1️⃣ Click vào link bên dưới\n2️⃣ Hoàn thành vượt link để nhận xu tự động\n",
-            inline=False
-        )
-        embed.add_field(
-            name="🔗 Link vượt",
-            value=f"[👉 Click vào đây để vượt link]({yeu_link})",
-            inline=False
-        )
-        embed.add_field(
-            name="💰 Phần thưởng",
-            value=f"**+{REWARD} xu** sau khi hoàn thành",
-            inline=True
-        )
-        embed.add_field(
-            name="⏰ Thời gian",
-            value=f"Có hiệu lực trong {PENDING_EXPIRE_SECONDS // 60} phút",
-            inline=True
-        )
-        embed.set_footer(text=f" • Chúc bạn may mắn!")
-        embed.timestamp = datetime.datetime.utcnow()
+        print(f"[nhanxu_logic] invoked by {interaction.user} ({getattr(interaction.user,'id',None)})")
+        try:
+            await interaction.response.defer(ephemeral=True)
+            deferred = True
+        except Exception as e:
+            # defer may fail if interaction already responded/invalid; log and continue
+            print("[nhanxu_logic] defer() failed:", e)
+            traceback.print_exc()
 
-        await interaction.user.send(embed=embed)
-        await interaction.followup.send("✅ Link đã gửi vào DM của bạn.", ephemeral=True)
-    except discord.Forbidden:
-        # cannot DM, send ephemeral with embed
-        embed = discord.Embed(
-            title="⚠️ Không thể gửi DM",
-            description="Hãy bật DM từ thành viên server để nhận link!",
-            color=0xff0000
-        )
-        embed.add_field(
-            name="🔗 Link của bạn",
-            value=f"[Click vào đây]({yeu_link})",
-            inline=False
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        # Check daily limit per user
+        uid = interaction.user.id
+        user = load_user(uid)
+        today = datetime.date.today().isoformat()
+        if user.get("last_day") != today:
+            user["last_day"] = today
+            user["claims_today"] = 0
+        if user.get("claims_today", 0) >= DAILY_LIMIT:
+            msg = f"⚠️ Bạn đã nhận đủ {DAILY_LIMIT} lần hôm nay."
+            if deferred:
+                return await interaction.followup.send(msg, ephemeral=True)
+            return await interaction.response.send_message(msg, ephemeral=True)
 
+        codes = load_codes()
+        print(f"[nhanxu_logic] Loaded codes count: {len(codes) if codes else 0}")
+        if not codes:
+            msg = "⚠️ Hiện không còn code."
+            print(f"[nhanxu_logic] No codes available, returning error")
+            if deferred:
+                return await interaction.followup.send(msg, ephemeral=True)
+            return await interaction.response.send_message(msg, ephemeral=True)
+
+        # pop random code
+        code = random.choice(codes)
+        # remove it
+        codes.remove(code)
+        save_codes(codes)
+
+        # create UUID token for security
+        token = uuid.uuid4().hex
+
+        # create yeumoney link with token
+        yeu_link = create_yeumoney_link(token)
+        if not yeu_link:
+            # if fail, return code back
+            codes = load_codes()
+            if code not in codes:
+                codes.append(code)
+                save_codes(codes)
+            msg = "❌ Lỗi khi tạo link YeuMoney. Vui lòng thử lại sau."
+            if deferred:
+                return await interaction.followup.send(msg, ephemeral=True)
+            return await interaction.response.send_message(msg, ephemeral=True)
+
+        # mark pending with token as key
+        pending = load_pending()
+        pending[token] = {
+            "code": code,
+            "user_id": str(uid),
+            "created": datetime.datetime.utcnow().isoformat(),
+            "yeu_link": yeu_link,
+            "redeemed": False
+        }
+        save_pending(pending)
+
+        # update user claims
+        user["claims_today"] = user.get("claims_today", 0) + 1
+        user["last_day"] = today
+        user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | nhanxu | code={code} | link={yeu_link}")
+        save_user(uid, user)
+
+        # DM user with embed
+        try:
+            embed = discord.Embed(
+                title="🎁 NHẬN XU MIỄN PHÍ",
+                description="Vượt link bên dưới để nhận xu!",
+                color=0x00ff00
+            )
+            embed.add_field(
+                name="📋 Hướng dẫn",
+                value="1️⃣ Click vào link bên dưới\n2️⃣ Hoàn thành vượt link để nhận xu tự động\n",
+                inline=False
+            )
+            embed.add_field(
+                name="🔗 Link vượt",
+                value=f"[👉 Click vào đây để vượt link]({yeu_link})",
+                inline=False
+            )
+            embed.add_field(
+                name="💰 Phần thưởng",
+                value=f"**+{REWARD} xu** sau khi hoàn thành",
+                inline=True
+            )
+            embed.add_field(
+                name="⏰ Thời gian",
+                value=f"Có hiệu lực trong {PENDING_EXPIRE_SECONDS // 60} phút",
+                inline=True
+            )
+            embed.set_footer(text=f" • Chúc bạn may mắn!")
+            embed.timestamp = datetime.datetime.utcnow()
+
+            await interaction.user.send(embed=embed)
+            success_msg = "✅ Link đã gửi vào DM của bạn."
+            if deferred:
+                await interaction.followup.send(success_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(success_msg, ephemeral=True)
+        except discord.Forbidden:
+            # cannot DM, send ephemeral with embed containing the link
+            embed = discord.Embed(
+                title="⚠️ Không thể gửi DM",
+                description="Hãy bật DM từ thành viên server để nhận link!",
+                color=0xff0000
+            )
+            embed.add_field(
+                name="🔗 Link của bạn",
+                value=f"[Click vào đây]({yeu_link})",
+                inline=False
+            )
+            if deferred:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    except Exception as e:
+        print("[nhanxu_logic] Exception:", e)
+        traceback.print_exc()
+        # Attempt to notify user; if we've already deferred use followup, otherwise response
+        try:
+            if deferred:
+                await interaction.followup.send("❌ Lỗi nội bộ khi xử lý yêu cầu. Vui lòng thử lại sau.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Lỗi nội bộ khi xử lý yêu cầu. Vui lòng thử lại sau.", ephemeral=True)
+        except Exception:
+            # Last resort: log only
+            print("[nhanxu_logic] Failed to send error message to user")
 # Slash command wrapper
 @bot.tree.command(name="nhanxu", description="Nhận xu — bot sẽ gửi link YeuMoney qua DM")
 async def nhanxu(interaction: discord.Interaction):
-    await nhanxu_logic(interaction)
+    try:
+        print(f"[slash nhanxu] called by {interaction.user} ({interaction.user.id})")
+        await nhanxu_logic(interaction)
+    except Exception as e:
+        print("[slash nhanxu] Exception:", e)
+        traceback.print_exc()
+        try:
+            await interaction.response.send_message("❌ Lỗi nội bộ khi xử lý lệnh /nhanxu.", ephemeral=True)
+        except Exception:
+            try:
+                await interaction.followup.send("❌ Lỗi nội bộ khi xử lý lệnh /nhanxu.", ephemeral=True)
+            except Exception:
+                print("[slash nhanxu] Could not notify user about error")
 
 # --------------------------
 # Admin commands
@@ -488,7 +560,7 @@ async def rutxu_logic(interaction: discord.Interaction, name_in_game: str, amoun
     user["logs"].append(f"{datetime.datetime.utcnow().isoformat()} | rutxu | -{amount} | name={name_in_game} | channel_id={RUTXU_CHANNEL_ID}")
     save_user(uid, user)
     
-    final_command = f"!playerpoint give {name_in_game} {amount}"
+    final_command = f"coin give {name_in_game} {amount}"
     await interaction.followup.send(f"✅ **Giao dịch hoàn tất!**\n**-{amount} xu** đã được trừ khỏi tài khoản của bạn. (Còn lại: **{user['xu']}** xu)\nLệnh chuyển điểm đã được gửi đến kênh quản lý.", ephemeral=True)
     
     try:
